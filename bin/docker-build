@@ -9,10 +9,21 @@ fi
 
 bindir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-$bindir/docker-build-controller
-$bindir/docker-build-web
-$bindir/docker-build-proxy-init
-$bindir/docker-build-cli-bin
-$bindir/docker-build-grafana
+containers=$(cat <<-END
+controller
+web
+proxy-init
+cli-bin
+grafana
+proxy
+END
+)
 
-$bindir/docker-build-proxy
+if which parallel >/dev/null; then
+  cmd="parallel $bindir/docker-build-{}"
+else
+  printf "Install parallel to speed the build up (brew install parallel)\n"
+  cmd="xargs -I{} /bin/sh -c $bindir/docker-build-{}"
+fi
+
+echo "$containers" | $cmd
