@@ -22,11 +22,19 @@ pub struct BoundPort {
 
 /// Initiates a client connection to the given address.
 pub fn connect(addr: &SocketAddr) -> Connecting {
-    Connecting(PlaintextSocket::connect(addr))
+    Connecting {
+        inner: PlaintextSocket::connect(addr),
+        // TODO: when we can open TLS client connections, this is where we will
+        //       indicate that for telemetry.
+        is_tls: false,
+    }
 }
 
 /// A socket that is in the process of connecting.
-pub struct Connecting(ConnectFuture);
+pub struct Connecting {
+    inner: ConnectFuture,
+    is_tls: bool,
+}
 
 /// Abstracts a plaintext socket vs. a TLS decorated one.
 ///
@@ -44,6 +52,9 @@ pub struct Connection {
     /// When calling `read`, it's important to consume bytes from this buffer
     /// before calling `io.read`.
     peek_buf: BytesMut,
+
+    /// Whether or not the connection is secured with TLS.
+    is_tls: bool,
 }
 
 /// A trait describing that a type can peek bytes.
@@ -130,9 +141,15 @@ impl BoundPort {
                         Some(tls_config) => {
                             Either::A(
                                 tls::Connection::accept(socket, tls_config.clone())
-                                    .map(move |tls| (Connection::new(Box::new(tls)), remote_addr)))
+                                    .map(move |tls| {
+                                        let conn = Connection::new(Box::new(tls), true);
+                                        (conn, remote_addr)
+                                    })
+                                )
                         },
-                        None => Either::B(future::ok((Connection::new(Box::new(socket)), remote_addr))),
+                        None => Either::B(future::ok(
+                            (Connection::new(Box::new(socket), false), remote_addr)
+                        )),
                     }
                 })
                 .or_else(|err| {
@@ -152,9 +169,9 @@ impl Future for Connecting {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let socket = try_ready!(self.0.poll());
+        let socket = try_ready!(self.inner.poll());
         set_nodelay_or_warn(&socket);
-        Ok(Async::Ready(Connection::new(Box::new(socket))))
+        Ok(Async::Ready(Connection::new(Box::new(socket), self.is_tls)))
     }
 }
 
@@ -162,10 +179,11 @@ impl Future for Connecting {
 
 impl Connection {
     /// A constructor of `Connection` with a plain text TCP socket.
-    fn new(io: Box<Io>) -> Self {
+    fn new(io: Box<Io>, is_tls: bool) -> Self {
         Connection {
             io,
             peek_buf: BytesMut::new(),
+            is_tls,
         }
     }
 
@@ -175,6 +193,10 @@ impl Connection {
 
     pub fn local_addr(&self) -> Result<SocketAddr, std::io::Error> {
         self.io.local_addr()
+    }
+
+    pub fn is_tls(&self) -> bool {
+        self.is_tls
     }
 }
 
