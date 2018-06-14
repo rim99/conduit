@@ -3,8 +3,9 @@ use futures::future::{
     Future,
     ExecuteError,
     ExecuteErrorKind,
-    Executor,
 };
+pub use futures::future::Executor;
+
 use tokio::{
     executor::{
         DefaultExecutor,
@@ -18,7 +19,10 @@ use std::{
     error::Error as StdError,
     fmt,
     io,
+    sync::Arc,
 };
+
+pub type BoxSendFuture = Box<Future<Item = (), Error = ()> + Send>;
 
 /// An empty type which implements `Executor` by lazily  calling
 /// `tokio::executor::DefaultExecutor::current().execute(...)`.
@@ -35,6 +39,10 @@ pub struct LazyExecutor;
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct BoxExecutor<E: TokioExecutor>(E);
+
+/// A `futures::executor::Executor` with any generics erased.
+#[derive(Clone)]
+pub struct ErasedExecutor(Arc<Executor<BoxSendFuture> + Send + Sync>);
 
 /// Indicates which Tokio `Runtime` should be used for the main proxy.
 ///
@@ -71,7 +79,7 @@ pub enum Error {
 impl TokioExecutor for LazyExecutor {
     fn spawn(
         &mut self,
-        future: Box<Future<Item = (), Error = ()> + 'static + Send>
+        future: BoxSendFuture,
     ) -> Result<(), SpawnError>
     {
         DefaultExecutor::current().spawn(future)
@@ -118,7 +126,7 @@ impl<E: TokioExecutor> BoxExecutor<E> {
 impl<E: TokioExecutor> TokioExecutor for BoxExecutor<E> {
     fn spawn(
         &mut self,
-        future: Box<Future<Item = (), Error = ()> + 'static + Send>
+        future: BoxSendFuture,
     ) -> Result<(), SpawnError> {
         self.0.spawn(future)
     }
@@ -132,7 +140,7 @@ impl<F, E> Executor<F> for BoxExecutor<E>
 where
     F: Future<Item = (), Error = ()> + 'static + Send,
     E: TokioExecutor,
-    E: Executor<Box<Future<Item = (), Error = ()> + Send + 'static>>,
+    E: Executor<BoxSendFuture>,
 {
     fn execute(&self, future: F) -> Result<(), ExecuteError<F>> {
         // Check the status of the executor first, so that we can return the
@@ -151,6 +159,30 @@ where
         self.0.execute(Box::new(future))
             .expect("spawn() errored but status() was Ok");
         Ok(())
+    }
+}
+
+// ===== impl ErasedExecutor =====;
+
+impl ErasedExecutor {
+    pub fn erase<E: Executor<BoxSendFuture> + Send + Sync + 'static>(exe: E) -> ErasedExecutor {
+        ErasedExecutor(Arc::new(exe))
+    }
+}
+
+impl<F> Executor<F> for ErasedExecutor
+where
+    F: Future<Item = (), Error = ()> + 'static + Send,
+{
+    fn execute(&self, future: F) -> Result<(), ExecuteError<F>> {
+        self.0.execute(Box::new(future))
+            .map_err(|_| panic!("erased arc executor error"))
+    }
+}
+
+impl fmt::Debug for ErasedExecutor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.pad("ErasedExecutor")
     }
 }
 

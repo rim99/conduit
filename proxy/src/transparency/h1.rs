@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use http;
-use http::header::HOST;
+use http::header::{HOST, UPGRADE};
 use http::uri::{Authority, Parts, Scheme, Uri};
+
 use ctx::transport::{Server as ServerCtx};
 
 /// Tries to make sure the `Uri` of the request is in a form needed by
@@ -81,4 +82,16 @@ pub fn strip_connection_headers(headers: &mut http::HeaderMap) {
     }
 }
 
+/// Checks requests to determine if they want to perform an HTTP upgrade.
+pub fn wants_upgrade<B>(req: &http::Request<B>) -> bool {
+    // HTTP upgrades were added in 1.1, not 1.0.
+    req.version() == http::Version::HTTP_11
+        && req.headers().contains_key(UPGRADE)
+}
 
+/// Checks responses to determine if they are successful HTTP upgrades.
+pub fn is_upgrade<B>(res: &http::Response<B>) -> bool {
+    // 101 Switching Protocols
+    res.status() == http::StatusCode::SWITCHING_PROTOCOLS
+        && res.version() == http::Version::HTTP_11
+}

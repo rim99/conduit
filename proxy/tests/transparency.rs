@@ -3,12 +3,6 @@
 mod support;
 use self::support::*;
 
-macro_rules! assert_contains {
-    ($scrape:expr, $contains:expr) => {
-        assert_eventually!($scrape.contains($contains), "metrics scrape:\n{:8}\ndid not contain:\n{:8}", $scrape, $contains)
-    }
-}
-
 #[test]
 fn outbound_http1() {
     let _ = env_logger::try_init();
@@ -329,33 +323,56 @@ fn tcp_connections_close_if_client_closes() {
 }
 
 #[test]
-fn http11_upgrade_not_supported() {
+fn http11_upgrades() {
     let _ = env_logger::try_init();
 
-    // our h1 proxy will strip the Connection header
-    // and headers it mentions
-    let msg1 = "\
+    // To simplify things for this test, we just use the test TCP
+    // client and server to do an HTTP upgrade.
+    //
+    // This is upgrading to 'chatproto', a made up plaintext protocol
+    // to simplify testing.
+
+    let upgrade_req = "\
         GET /chat HTTP/1.1\r\n\
         Host: foo.bar\r\n\
-        Connection: Upgrade\r\n\
-        Upgrade: websocket\r\n\
+        Connection: upgrade\r\n\
+        Upgrade: chatproto\r\n\
         \r\n\
         ";
-
-    // but let's pretend the server tries to upgrade
-    // anyways
-    let msg2 = "\
+    let upgrade_res = "\
         HTTP/1.1 101 Switching Protocols\r\n\
-        Upgrade: websocket\r\n\
-        Connection: Upgrade\r\n\
+        Upgrade: chatproto\r\n\
+        Connection: upgrade\r\n\
         \r\n\
         ";
+    let upgrade_needle = "\r\nupgrade: chatproto\r\n";
+    let chatproto_req = "[chatproto-c]{send}: hi all\n";
+    let chatproto_res = "[chatproto-s]{recv}: welcome!\n";
+
 
     let srv = server::tcp()
-        .accept(move |read| {
-            let head = s(&read);
-            assert!(!head.contains("Upgrade: websocket"));
-            msg2
+        .accept_fut(move |sock| {
+            // Read upgrade_req...
+            tokio_io::io::read(sock, vec![0; 512])
+                .and_then(move |(sock, vec, n)| {
+                    let head = s(&vec[..n]);
+                    assert_contains!(head, upgrade_needle);
+
+                    // Write upgrade_res back...
+                    tokio_io::io::write_all(sock, upgrade_res)
+                })
+                .and_then(move |(sock, _)| {
+                    // Read the message in 'chatproto' format
+                    tokio_io::io::read(sock, vec![0; 512])
+                })
+                .and_then(move |(sock, vec, n)| {
+                    assert_eq!(s(&vec[..n]), chatproto_req);
+
+                    // Some processing... and then write back in chatproto...
+                    tokio_io::io::write_all(sock, chatproto_res)
+                })
+                .map(|_| ())
+                .map_err(|e| panic!("tcp server error: {}", e))
         })
         .run();
     let proxy = proxy::new()
@@ -366,10 +383,22 @@ fn http11_upgrade_not_supported() {
 
     let tcp_client = client.connect();
 
-    tcp_client.write(msg1);
+    tcp_client.write(upgrade_req);
 
-    let expected = "HTTP/1.1 500 ";
-    assert_eq!(s(&tcp_client.read()[..expected.len()]), expected);
+    let resp = tcp_client.read();
+    let resp_str = s(&resp);
+    assert!(
+        resp_str.starts_with("HTTP/1.1 101 Switching Protocols\r\n"),
+        "response not an upgrade: {:?}",
+        resp_str
+    );
+    assert_contains!(resp_str, upgrade_needle);
+
+    // We've upgraded from HTTP to chatproto! Say hi!
+    tcp_client.write(chatproto_req);
+    // Did anyone respond?
+    let chat_resp = tcp_client.read();
+    assert_eq!(s(&chat_resp), chatproto_res);
 }
 
 #[test]
@@ -755,7 +784,7 @@ fn retry_reconnect_errors() {
 
     // wait until metrics has seen our connection, this can be flaky depending on
     // all the other threads currently running...
-    assert_contains!(
+    assert_eventually_contains!(
         metrics.get("/metrics"),
         "tcp_open_total{direction=\"inbound\",peer=\"src\"} 1"
     );
