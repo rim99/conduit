@@ -17,6 +17,8 @@ use task::{ErasedExecutor, Executor};
 /// inserted into the `Request::extensions()`. If the HTTP1 client service
 /// also detects an upgrade, the two `OnUpgrade` futures will be joined
 /// together with the glue in this type.
+// Note: this relies on their only having been 2 Inner clones, so don't
+// implement `Clone` for this type.
 pub struct Http11Upgrade {
     half: Half,
     inner: Arc<Inner>,

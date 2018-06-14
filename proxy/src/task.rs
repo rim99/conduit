@@ -19,7 +19,6 @@ use std::{
     error::Error as StdError,
     fmt,
     io,
-    sync::Arc,
 };
 
 pub type BoxSendFuture = Box<Future<Item = (), Error = ()> + Send>;
@@ -41,8 +40,7 @@ pub struct LazyExecutor;
 pub struct BoxExecutor<E: TokioExecutor>(E);
 
 /// A `futures::executor::Executor` with any generics erased.
-#[derive(Clone)]
-pub struct ErasedExecutor(Arc<Executor<BoxSendFuture> + Send + Sync>);
+pub struct ErasedExecutor(Box<Executor<BoxSendFuture> + Send + Sync>);
 
 /// Indicates which Tokio `Runtime` should be used for the main proxy.
 ///
@@ -166,7 +164,7 @@ where
 
 impl ErasedExecutor {
     pub fn erase<E: Executor<BoxSendFuture> + Send + Sync + 'static>(exe: E) -> ErasedExecutor {
-        ErasedExecutor(Arc::new(exe))
+        ErasedExecutor(Box::new(exe))
     }
 }
 
@@ -176,7 +174,7 @@ where
 {
     fn execute(&self, future: F) -> Result<(), ExecuteError<F>> {
         self.0.execute(Box::new(future))
-            .map_err(|_| panic!("erased arc executor error"))
+            .map_err(|_| panic!("erased executor error"))
     }
 }
 
