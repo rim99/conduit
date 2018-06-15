@@ -87,7 +87,7 @@ impl Http11Upgrade {
                     .inner
                     .server
                     .try_lock()
-                    .expect("only Half::Server touchs server TryLock");
+                    .expect("only Half::Server touches server TryLock");
                 debug_assert!(lock.is_none());
                 *lock = Some(upgrade);
             },
@@ -96,7 +96,7 @@ impl Http11Upgrade {
                     .inner
                     .client
                     .try_lock()
-                    .expect("only Half::Client touchs client TryLock");
+                    .expect("only Half::Client touches client TryLock");
                 debug_assert!(lock.is_none());
                 *lock = Some(upgrade);
             }
