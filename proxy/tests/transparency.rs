@@ -402,6 +402,44 @@ fn http11_upgrades() {
 }
 
 #[test]
+fn http11_upgrade_h2_stripped() {
+    let _ = env_logger::try_init();
+
+    // If an `h2` upgrade over HTTP/1.1 were to go by the proxy,
+    // and it succeeded, there would an h2 connection, but it would
+    // be opaque-to-the-proxy, acting as just a TCP proxy.
+    //
+    // A user wouldn't be able to see any usual HTTP telemetry about
+    // requests going over that connection. Instead of that confusion,
+    // the proxy strips h2 upgrade headers.
+    //
+    // Eventually, the proxy will support h2 upgrades directly.
+
+    let srv = server::http1()
+        .route_fn("/", |req| {
+            assert!(!req.headers().contains_key("connection"));
+            assert!(!req.headers().contains_key("upgrade"));
+            assert!(!req.headers().contains_key("http2-settings"));
+            Response::default()
+        })
+        .run();
+    let proxy = proxy::new()
+        .inbound(srv)
+        .run();
+
+    let client = client::http1(proxy.inbound, "transparency.test.svc.cluster.local");
+
+    let res = client.request(client.request_builder("/")
+        .header("upgrade", "h2c")
+        .header("http2-settings", "")
+        .header("connection", "upgrade, http2-settings"));
+
+    // If the assertion is trigger in the above test route, the proxy will
+    // just send back a 500.
+    assert_eq!(res.status(), http::StatusCode::OK);
+}
+
+#[test]
 fn http1_requests_without_body_doesnt_add_transfer_encoding() {
     let _ = env_logger::try_init();
 
